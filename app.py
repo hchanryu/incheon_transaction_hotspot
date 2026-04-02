@@ -28,7 +28,7 @@ DATA_DIR = BASE_DIR / "data"
 FONT_DIR = BASE_DIR / "fonts"
 
 PARQUET_PATH = DATA_DIR / "data.parquet"
-FONT_PATH = FONT_DIR / "NanumGothic.ttf"
+FONT_PATH = DATA_DIR / "NanumGothic.ttf"
 REVISIT_CSV_PATH = DATA_DIR / "revisit_output_syn.csv"
 GU_REFERENCE_CSV_PATH = DATA_DIR / "gu_output_syn.csv"
 TOTAL_REFERENCE_CSV_PATH = DATA_DIR / "total_output_syn.csv"
