@@ -6,5 +6,4 @@ pydeck
 matplotlib
 shapely
 pyarrow
-fiona
 pyproj
