@@ -968,7 +968,7 @@ if selected_row:
     # --------------------------------------------------
     if np.isfinite(selected_top_pct):
         st.markdown(
-            "**선택한 구역의 총 매출액은 {}원이며, 재방문율은 {}입니다. 또한 Gi 기준 현재 선택 범위 내 상위 {:.1f}%에 해당합니다.**".format(
+            "**선택한 구역의 총 매출액은 {}원이며, 재방문율은 {}입니다. 인천광역시 전체에서 상위 {:.1f}% 거래 금액 집중도를 가진 지역입니다.**".format(
                 format_amt(all_amt_sum),
                 format_rate(revisit_rate_val),
                 selected_top_pct,
@@ -988,11 +988,11 @@ if selected_row:
     if has_any_summary_reference(selected_row, ["all_amt_sum", "revisit_rate"]):
         st.markdown(SUMMARY_REFERENCE_LABEL)
         r1, r2, r3 = st.columns(3)
-        r1.metric("같은 구 총 매출액", format_amt(ref_all_amt_sum))
-        r2.metric("같은 구 재방문율", format_rate(ref_revisit_rate))
+        r1.metric("평균 총 매출액", format_amt(ref_all_amt_sum))
+        r2.metric("평균 재방문율", format_rate(ref_revisit_rate))
 
         if np.isfinite(mean_gi_top_pct):
-            r3.metric("평균 Gi 분위수", f"상위 {mean_gi_top_pct:.1f}%")
+            r3.metric("평균 거래 금액 집중도 분위수", f"상위 {mean_gi_top_pct:.1f}%")
         else:
             r3.metric("평균 Gi 분위수", "-")
     else:
