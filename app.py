@@ -992,7 +992,7 @@ if selected_row:
         r2.metric("평균 재방문율", format_rate(ref_revisit_rate))
 
         if np.isfinite(mean_gi_top_pct):
-            r3.metric("평균 거래 금액 집중도 분위수", f"상위 {mean_gi_top_pct:.1f}%")
+            r3.metric("평균 거래 금액 집중도", f"상위 {mean_gi_top_pct:.1f}%")
         else:
             r3.metric("평균 Gi 분위수", "-")
     else:
