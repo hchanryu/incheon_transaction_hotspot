@@ -903,37 +903,98 @@ if selected_row:
     gu_nm = selected_row.get("gu_nm", "-")
     dong_nm = selected_row.get("dong_nm", "-")
 
-    base_z_raw = selected_row.get("total_gi*")
-    if base_z_raw is None or pd.isna(base_z_raw):
-        base_z_raw = selected_row.get("total_Gi*")
-    if base_z_raw is None or pd.isna(base_z_raw):
-        base_z_raw = selected_row.get("Gi*")
+    # --------------------------------------------------
+    # Gi 컬럼 선택
+    # --------------------------------------------------
+    gi_col = None
+    for col in ["total_gi*", "total_Gi*", "Gi*"]:
+        if col in detail_df.columns:
+            gi_col = col
+            break
 
+    if gi_col is not None:
+        gi_series = pd.to_numeric(detail_df[gi_col], errors="coerce")
+    else:
+        gi_series = pd.Series(dtype=float)
+
+    base_z_raw = selected_row.get(gi_col) if gi_col is not None else np.nan
     base_z = pd.to_numeric(pd.Series([base_z_raw]), errors="coerce").iloc[0]
+
     all_amt_sum = selected_row.get("all_amt_sum")
     revisit_rate_val = get_revisit_value_from_row(selected_row)
 
     ref_all_amt_sum = get_reference_summary_value(selected_row, "all_amt_sum")
     ref_revisit_rate = get_reference_summary_value(selected_row, "revisit_rate")
 
+    # --------------------------------------------------
+    # 분위수 계산
+    # --------------------------------------------------
+    selected_percentile = np.nan
+    selected_top_pct = np.nan
+    mean_gi_value = np.nan
+    mean_gi_percentile = np.nan
+    mean_gi_top_pct = np.nan
+
+    if gi_col is not None and gi_series.notna().any() and np.isfinite(base_z):
+        percentile_series = gi_series.rank(method="average", pct=True) * 100
+
+        selected_idx = matched.index[0]
+        if selected_idx in percentile_series.index:
+            selected_percentile = float(percentile_series.loc[selected_idx])
+            selected_top_pct = 100.0 - selected_percentile
+
+        mean_gi_value = float(gi_series.mean())
+
+        valid_gi = gi_series.dropna()
+        if not valid_gi.empty and np.isfinite(mean_gi_value):
+            mean_gi_percentile = float((valid_gi <= mean_gi_value).mean() * 100)
+            mean_gi_top_pct = 100.0 - mean_gi_percentile
+
+    # --------------------------------------------------
+    # 상단 metric
+    # --------------------------------------------------
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("grid_id", grid_id)
     c2.metric("구", gu_nm)
     c3.metric("동", dong_nm if str(dong_nm).strip() else "-")
-    c4.metric("선택 total_gi*", format_float(base_z, 4))
 
-    st.markdown(
-        "**선택한 구역의 총 매출액은 {}원이며, 재방문율은 {}입니다.**".format(
-            format_amt(all_amt_sum),
-            format_rate(revisit_rate_val),
+    if np.isfinite(selected_top_pct):
+        c4.metric("선택 Gi 분위수", f"상위 {selected_top_pct:.1f}%")
+    else:
+        c4.metric("선택 Gi 분위수", "-")
+
+    # --------------------------------------------------
+    # 설명 문장
+    # --------------------------------------------------
+    if np.isfinite(selected_top_pct):
+        st.markdown(
+            "**선택한 구역의 총 매출액은 {}원이며, 재방문율은 {}입니다. 또한 Gi 기준 현재 선택 범위 내 상위 {:.1f}%에 해당합니다.**".format(
+                format_amt(all_amt_sum),
+                format_rate(revisit_rate_val),
+                selected_top_pct,
+            )
         )
-    )
+    else:
+        st.markdown(
+            "**선택한 구역의 총 매출액은 {}원이며, 재방문율은 {}입니다.**".format(
+                format_amt(all_amt_sum),
+                format_rate(revisit_rate_val),
+            )
+        )
 
+    # --------------------------------------------------
+    # 같은 구 기준 summary
+    # --------------------------------------------------
     if has_any_summary_reference(selected_row, ["all_amt_sum", "revisit_rate"]):
         st.markdown(SUMMARY_REFERENCE_LABEL)
-        r1, r2 = st.columns(2)
+        r1, r2, r3 = st.columns(3)
         r1.metric("같은 구 총 매출액", format_amt(ref_all_amt_sum))
         r2.metric("같은 구 재방문율", format_rate(ref_revisit_rate))
+
+        if np.isfinite(mean_gi_top_pct):
+            r3.metric("평균 Gi 분위수", f"상위 {mean_gi_top_pct:.1f}%")
+        else:
+            r3.metric("평균 Gi 분위수", "-")
     else:
         st.caption("같은 구 기준 summary reference를 찾지 못했습니다. total_output_syn.csv의 gu/amt/revisit_rate 값을 확인하십시오.")
 
@@ -988,3 +1049,10 @@ if show_debug:
         st.write("선택 row gu_nm:", selected_row.get("gu_nm"))
         st.write("summary reference(all_amt_sum):", ref_all_amt_sum)
         st.write("summary reference(revisit_rate):", ref_revisit_rate)
+        st.write("gi_col:", gi_col)
+        st.write("selected Gi raw:", base_z)
+        st.write("selected percentile:", selected_percentile)
+        st.write("selected top %:", selected_top_pct)
+        st.write("mean Gi value:", mean_gi_value)
+        st.write("mean Gi percentile:", mean_gi_percentile)
+        st.write("mean Gi top %:", mean_gi_top_pct)
