@@ -27,7 +27,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 FONT_DIR = BASE_DIR / "fonts"
 
-PARQUET_PATH = DATA_DIR / "data.parquet"
+PARQUET_PATH = DATA_DIR / "output_with_weekend.parquet"
 FONT_PATH = DATA_DIR / "NanumGothic.ttf"
 REVISIT_CSV_PATH = DATA_DIR / "revisit_output_syn.csv"
 GU_REFERENCE_CSV_PATH = DATA_DIR / "gu_output_syn.csv"
@@ -38,6 +38,7 @@ LAYER_ID = "geojson_layer"
 LOWRES_SIMPLIFY_TOL = 0.0001
 REFERENCE_LABEL = "같은 구 기준"
 SUMMARY_REFERENCE_LABEL = "같은 구 기준 요약값"
+DAY_REFERENCE_LABEL = "같은 구 기준 주말/평일 평균"
 
 # --------------------------------------------------
 # ratio 컬럼 정의
@@ -73,6 +74,11 @@ RATE_GROUPS = {
     ],
 }
 ALL_RATE_COLUMNS = [col for cols in RATE_GROUPS.values() for col in cols]
+
+DAY_LABEL_CANDIDATES = {
+    "weekday": ["weekday", "weekdays", "평일", "주중"],
+    "weekend": ["weekend", "weekends", "주말"],
+}
 
 # --------------------------------------------------
 # 폰트 설정
@@ -352,13 +358,64 @@ def load_gu_reference_csv(path: str) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
+def load_day_reference_csv(path: str) -> pd.DataFrame:
+    if not path or not os.path.exists(path):
+        return pd.DataFrame(columns=["gu_nm", "weekday_ratio", "weekend_ratio"])
+
+    df = pd.read_csv(path)
+
+    required_cols = {"gu_nm", "group_type", "category", "ratio"}
+    if not required_cols.issubset(df.columns):
+        raise ValueError("gu_output_syn.csv에는 'gu_nm', 'group_type', 'category', 'ratio' 컬럼이 있어야 합니다.")
+
+    df = df[["gu_nm", "group_type", "category", "ratio"]].copy()
+    df["gu_nm"] = df["gu_nm"].astype(str).str.strip()
+    df["group_type"] = df["group_type"].astype(str).str.strip().str.lower()
+    df["category"] = df["category"].astype(str).str.strip()
+    df["ratio"] = pd.to_numeric(df["ratio"], errors="coerce")
+
+    df = df[df["group_type"] == "day"].copy()
+    if df.empty:
+        return pd.DataFrame(columns=["gu_nm", "weekday_ratio", "weekend_ratio"])
+
+    weekday_candidates = set(v.lower() for v in DAY_LABEL_CANDIDATES["weekday"])
+    weekend_candidates = set(v.lower() for v in DAY_LABEL_CANDIDATES["weekend"])
+
+    def normalize_day_category(x: str) -> Optional[str]:
+        x0 = str(x).strip().lower()
+        if x0 in weekday_candidates:
+            return "weekday_ratio"
+        if x0 in weekend_candidates:
+            return "weekend_ratio"
+        return None
+
+    df["day_col"] = df["category"].map(normalize_day_category)
+    df = df.dropna(subset=["day_col"])
+
+    if df.empty:
+        return pd.DataFrame(columns=["gu_nm", "weekday_ratio", "weekend_ratio"])
+
+    pivot = df.pivot_table(
+        index="gu_nm",
+        columns="day_col",
+        values="ratio",
+        aggfunc="mean"
+    ).reset_index()
+
+    for col in ["weekday_ratio", "weekend_ratio"]:
+        if col not in pivot.columns:
+            pivot[col] = np.nan
+
+    return pivot[["gu_nm", "weekday_ratio", "weekend_ratio"]].copy()
+
+
+@st.cache_data(show_spinner=False)
 def load_total_reference_csv(path: str) -> pd.DataFrame:
     if not path or not os.path.exists(path):
         return pd.DataFrame(columns=["gu_nm", "all_amt_sum", "revisit_rate"])
 
     df = pd.read_csv(path)
 
-    # total_output_syn.csv 실제 컬럼: gu, amt, revisit_rate
     required_cols = {"gu", "amt", "revisit_rate"}
     if not required_cols.issubset(df.columns):
         raise ValueError("total_output_syn.csv에는 'gu', 'amt', 'revisit_rate' 컬럼이 있어야 합니다.")
@@ -416,12 +473,40 @@ def get_reference_summary_value(row_dict: Dict[str, Any], metric_name: str) -> O
     return float(value)
 
 
+def get_day_reference_values(row_dict: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    gu_nm = str(row_dict.get("gu_nm", "")).strip()
+    if not gu_nm:
+        return {"weekday_ratio": None, "weekend_ratio": None}
+
+    ref_df = load_day_reference_csv(GU_REFERENCE_CSV_PATH)
+    if ref_df.empty:
+        return {"weekday_ratio": None, "weekend_ratio": None}
+
+    matched = ref_df.loc[ref_df["gu_nm"].astype(str).str.strip() == gu_nm]
+    if matched.empty:
+        return {"weekday_ratio": None, "weekend_ratio": None}
+
+    row = matched.iloc[0]
+    weekday_val = pd.to_numeric(pd.Series([row.get("weekday_ratio")]), errors="coerce").iloc[0]
+    weekend_val = pd.to_numeric(pd.Series([row.get("weekend_ratio")]), errors="coerce").iloc[0]
+
+    return {
+        "weekday_ratio": None if pd.isna(weekday_val) or not np.isfinite(weekday_val) else float(weekday_val),
+        "weekend_ratio": None if pd.isna(weekend_val) or not np.isfinite(weekend_val) else float(weekend_val),
+    }
+
+
 def has_any_ratio_reference(row_dict: Dict[str, Any], columns: List[str]) -> bool:
     return any(get_reference_ratio_value(row_dict, col) is not None for col in columns)
 
 
 def has_any_summary_reference(row_dict: Dict[str, Any], metric_names: List[str]) -> bool:
     return any(get_reference_summary_value(row_dict, metric_name) is not None for metric_name in metric_names)
+
+
+def has_day_reference(row_dict: Dict[str, Any]) -> bool:
+    vals = get_day_reference_values(row_dict)
+    return (vals["weekday_ratio"] is not None) or (vals["weekend_ratio"] is not None)
 
 
 def make_bar_chart_from_row(row_dict: Dict[str, Any], columns: List[str], title: str):
@@ -508,6 +593,58 @@ def make_bar_chart_from_row(row_dict: Dict[str, Any], columns: List[str], title:
             )
 
     for bar in bars2:
+        h = bar.get_height()
+        if np.isfinite(h):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                h + upper * 0.01,
+                f"{h:.1f}",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+
+    fig.tight_layout()
+    return fig
+
+
+def make_day_reference_chart(row_dict: Dict[str, Any], title: str = "주말/평일 비교"):
+    ref_vals = get_day_reference_values(row_dict)
+    weekday_val = ref_vals.get("weekday_ratio")
+    weekend_val = ref_vals.get("weekend_ratio")
+
+    values = np.array([
+        np.nan if weekday_val is None else weekday_val,
+        np.nan if weekend_val is None else weekend_val,
+    ], dtype=float)
+
+    if not np.isfinite(values).any():
+        return None
+
+    labels = ["평일", "주말"]
+
+    if np.nanmax(values[np.isfinite(values)]) <= 1.0:
+        plot_values = values * 100
+        y_label = "비율 (%)"
+    else:
+        plot_values = values
+        y_label = "값"
+
+    x = np.arange(len(labels))
+    fig, ax = plt.subplots(figsize=(5.8, 4.2))
+    bars = ax.bar(x, plot_values, width=0.55)
+
+    ax.set_title(title)
+    ax.set_xlabel("구분")
+    ax.set_ylabel(y_label)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+
+    ymax = float(np.nanmax(plot_values[np.isfinite(plot_values)])) if np.isfinite(plot_values).any() else 0.0
+    upper = ymax * 1.2 if ymax > 0 else 1.0
+    ax.set_ylim(0, upper)
+
+    for bar in bars:
         h = bar.get_height()
         if np.isfinite(h):
             ax.text(
@@ -741,9 +878,9 @@ with st.sidebar:
         st.caption("재방문율 CSV 경로를 찾지 못했습니다. 상단 REVISIT_CSV_PATH를 수정하십시오.")
 
     if os.path.exists(GU_REFERENCE_CSV_PATH):
-        st.caption(f"구 기준 ratio reference CSV 연결됨: {os.path.basename(GU_REFERENCE_CSV_PATH)}")
+        st.caption(f"구 기준 ratio/day reference CSV 연결됨: {os.path.basename(GU_REFERENCE_CSV_PATH)}")
     else:
-        st.caption("구 기준 ratio reference CSV 경로를 찾지 못했습니다. 상단 GU_REFERENCE_CSV_PATH를 수정하십시오.")
+        st.caption("구 기준 ratio/day reference CSV 경로를 찾지 못했습니다. 상단 GU_REFERENCE_CSV_PATH를 수정하십시오.")
 
     if os.path.exists(TOTAL_REFERENCE_CSV_PATH):
         st.caption(f"구 기준 summary reference CSV 연결됨: {os.path.basename(TOTAL_REFERENCE_CSV_PATH)}")
@@ -903,9 +1040,6 @@ if selected_row:
     gu_nm = selected_row.get("gu_nm", "-")
     dong_nm = selected_row.get("dong_nm", "-")
 
-    # --------------------------------------------------
-    # Gi 컬럼 선택
-    # --------------------------------------------------
     gi_col = None
     for col in ["total_gi*", "total_Gi*", "Gi*"]:
         if col in detail_df.columns:
@@ -926,9 +1060,6 @@ if selected_row:
     ref_all_amt_sum = get_reference_summary_value(selected_row, "all_amt_sum")
     ref_revisit_rate = get_reference_summary_value(selected_row, "revisit_rate")
 
-    # --------------------------------------------------
-    # 분위수 계산
-    # --------------------------------------------------
     selected_percentile = np.nan
     selected_top_pct = np.nan
     mean_gi_value = np.nan
@@ -950,9 +1081,6 @@ if selected_row:
             mean_gi_percentile = float((valid_gi <= mean_gi_value).mean() * 100)
             mean_gi_top_pct = 100.0 - mean_gi_percentile
 
-    # --------------------------------------------------
-    # 상단 metric
-    # --------------------------------------------------
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("grid_id", grid_id)
     c2.metric("구", gu_nm)
@@ -963,9 +1091,6 @@ if selected_row:
     else:
         c4.metric("선택 Gi 분위수", "-")
 
-    # --------------------------------------------------
-    # 설명 문장
-    # --------------------------------------------------
     if np.isfinite(selected_top_pct):
         st.markdown(
             "**선택한 구역의 총 매출액은 {}원이며, 재방문율은 {}입니다. 인천광역시 전체에서 상위 {:.1f}% 거래 금액 집중도를 가진 지역입니다.**".format(
@@ -982,9 +1107,6 @@ if selected_row:
             )
         )
 
-    # --------------------------------------------------
-    # 같은 구 기준 summary
-    # --------------------------------------------------
     if has_any_summary_reference(selected_row, ["all_amt_sum", "revisit_rate"]):
         st.markdown(SUMMARY_REFERENCE_LABEL)
         r1, r2, r3 = st.columns(3)
@@ -1020,6 +1142,16 @@ if selected_row:
                 plt.close(fig)
             else:
                 st.info("{} ratio 데이터가 없습니다.".format(title))
+
+    st.markdown("### 주말/평일 비교")
+    st.caption("현재 메인 데이터에는 선택 grid의 주말/평일 실측 컬럼이 없어, 같은 구 평균 reference만 표시합니다.")
+
+    day_fig = make_day_reference_chart(selected_row, title=DAY_REFERENCE_LABEL)
+    if day_fig is not None:
+        st.pyplot(day_fig, use_container_width=False)
+        plt.close(day_fig)
+    else:
+        st.caption("group_type='day' 기준 주말/평일 reference 데이터를 찾지 못했습니다.")
 else:
     st.info("지도에서 구역을 클릭하면 상세 문장과 bar chart가 표시됩니다.")
 
@@ -1049,6 +1181,7 @@ if show_debug:
         st.write("선택 row gu_nm:", selected_row.get("gu_nm"))
         st.write("summary reference(all_amt_sum):", ref_all_amt_sum)
         st.write("summary reference(revisit_rate):", ref_revisit_rate)
+        st.write("day reference:", get_day_reference_values(selected_row))
         st.write("gi_col:", gi_col)
         st.write("selected Gi raw:", base_z)
         st.write("selected percentile:", selected_percentile)
