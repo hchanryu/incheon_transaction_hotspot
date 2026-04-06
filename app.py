@@ -80,6 +80,16 @@ DAY_LABEL_CANDIDATES = {
     "weekend": ["weekend", "weekends", "주말"],
 }
 
+DAY_VALUE_COLUMN_CANDIDATES = {
+    "weekday": ["weekday_ratio", "weekday_rate", "평일_ratio", "평일_rate"],
+    "weekend": ["weekend_ratio", "weekend_rate", "주말_ratio", "주말_rate"],
+}
+
+DAY_DETAIL_CANDIDATE_COLUMNS = [
+    "weekday_ratio", "weekday_rate", "평일_ratio", "평일_rate",
+    "weekend_ratio", "weekend_rate", "주말_ratio", "주말_rate",
+]
+
 # --------------------------------------------------
 # 폰트 설정
 # --------------------------------------------------
@@ -232,6 +242,21 @@ def get_revisit_value_from_row(row_dict: Dict[str, Any]):
         revisit_value = row_dict.get("repeat_rate")
 
     return revisit_value
+
+
+def get_day_actual_values(row_dict: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    def get_first_valid(candidates: List[str]) -> Optional[float]:
+        for col in candidates:
+            if col in row_dict:
+                value = pd.to_numeric(pd.Series([row_dict.get(col)]), errors="coerce").iloc[0]
+                if not pd.isna(value) and np.isfinite(value):
+                    return float(value)
+        return None
+
+    return {
+        "weekday_ratio": get_first_valid(DAY_VALUE_COLUMN_CANDIDATES["weekday"]),
+        "weekend_ratio": get_first_valid(DAY_VALUE_COLUMN_CANDIDATES["weekend"]),
+    }
 
 
 def to_geojson_dict(gdf: gpd.GeoDataFrame) -> dict:
@@ -608,31 +633,58 @@ def make_bar_chart_from_row(row_dict: Dict[str, Any], columns: List[str], title:
     return fig
 
 
-def make_day_reference_chart(row_dict: Dict[str, Any], title: str = "주말/평일 비교"):
+def make_day_chart_from_row(row_dict: Dict[str, Any], title: str = "주말/평일 비교"):
+    actual_vals = get_day_actual_values(row_dict)
     ref_vals = get_day_reference_values(row_dict)
-    weekday_val = ref_vals.get("weekday_ratio")
-    weekend_val = ref_vals.get("weekend_ratio")
-
-    values = np.array([
-        np.nan if weekday_val is None else weekday_val,
-        np.nan if weekend_val is None else weekend_val,
-    ], dtype=float)
-
-    if not np.isfinite(values).any():
-        return None
 
     labels = ["평일", "주말"]
 
-    if np.nanmax(values[np.isfinite(values)]) <= 1.0:
-        plot_values = values * 100
+    actual_values = np.array([
+        np.nan if actual_vals["weekday_ratio"] is None else actual_vals["weekday_ratio"],
+        np.nan if actual_vals["weekend_ratio"] is None else actual_vals["weekend_ratio"],
+    ], dtype=float)
+
+    reference_values = np.array([
+        np.nan if ref_vals["weekday_ratio"] is None else ref_vals["weekday_ratio"],
+        np.nan if ref_vals["weekend_ratio"] is None else ref_vals["weekend_ratio"],
+    ], dtype=float)
+
+    has_actual = np.isfinite(actual_values).any()
+    has_reference = np.isfinite(reference_values).any()
+
+    if not has_actual and not has_reference:
+        return None
+
+    finite_actual = actual_values[np.isfinite(actual_values)]
+    finite_reference = reference_values[np.isfinite(reference_values)]
+
+    max_actual = float(np.nanmax(finite_actual)) if finite_actual.size > 0 else 0.0
+    max_reference = float(np.nanmax(finite_reference)) if finite_reference.size > 0 else 0.0
+
+    if max(max_actual, max_reference) <= 1.0:
+        actual_plot = actual_values * 100
+        reference_plot = reference_values * 100
         y_label = "비율 (%)"
     else:
-        plot_values = values
+        actual_plot = actual_values
+        reference_plot = reference_values
         y_label = "값"
 
     x = np.arange(len(labels))
     fig, ax = plt.subplots(figsize=(6.8, 4.5))
-    bars = ax.bar(x, plot_values, width=0.55)
+
+    if has_actual and has_reference:
+        width = 0.38
+        bars1 = ax.bar(x - width / 2, actual_plot, width, label="선택 구역")
+        bars2 = ax.bar(x + width / 2, reference_plot, width, label=REFERENCE_LABEL)
+    elif has_actual:
+        width = 0.55
+        bars1 = ax.bar(x, actual_plot, width, label="선택 구역")
+        bars2 = []
+    else:
+        width = 0.55
+        bars1 = ax.bar(x, reference_plot, width, label=REFERENCE_LABEL)
+        bars2 = []
 
     ax.set_title(title)
     ax.set_xlabel("구분")
@@ -640,11 +692,32 @@ def make_day_reference_chart(row_dict: Dict[str, Any], title: str = "주말/평�
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
 
-    ymax = float(np.nanmax(plot_values[np.isfinite(plot_values)])) if np.isfinite(plot_values).any() else 0.0
+    if has_actual and has_reference:
+        ax.legend()
+
+    plot_candidates = []
+    if has_actual and np.isfinite(actual_plot).any():
+        plot_candidates.append(float(np.nanmax(actual_plot[np.isfinite(actual_plot)])))
+    if has_reference and np.isfinite(reference_plot).any():
+        plot_candidates.append(float(np.nanmax(reference_plot[np.isfinite(reference_plot)])))
+
+    ymax = max(plot_candidates) if plot_candidates else 0.0
     upper = ymax * 1.2 if ymax > 0 else 1.0
     ax.set_ylim(0, upper)
 
-    for bar in bars:
+    for bar in bars1:
+        h = bar.get_height()
+        if np.isfinite(h):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                h + upper * 0.01,
+                f"{h:.1f}",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+
+    for bar in bars2:
         h = bar.get_height()
         if np.isfinite(h):
             ax.text(
@@ -797,7 +870,7 @@ def build_map_payload(
         "revisit_rate",
         "revist_rate",
         "repeat_rate",
-    ] + ALL_RATE_COLUMNS
+    ] + ALL_RATE_COLUMNS + DAY_DETAIL_CANDIDATE_COLUMNS
     detail_cols = [c for c in detail_cols if c in gdf_detail.columns]
     detail_df = gdf_detail[detail_cols].copy()
 
@@ -1145,21 +1218,26 @@ if selected_row:
                 st.info("{} ratio 데이터가 없습니다.".format(title))
 
     with row3[0]:
-        day_fig = make_day_reference_chart(selected_row, title="주말/평일 비교")
+        day_fig = make_day_chart_from_row(selected_row, title="주말/평일 비교")
         if day_fig is not None:
             st.pyplot(day_fig, use_container_width=True)
             plt.close(day_fig)
         else:
-            st.info("group_type='day' 기준 주말/평일 reference 데이터를 찾지 못했습니다.")
+            st.info("주말/평일 실제값 또는 reference 데이터를 찾지 못했습니다.")
 
     with row3[1]:
         st.markdown("### 주말/평일 기준")
-        st.caption("선택 grid 실측값이 아니라, 같은 구 평균 reference입니다.")
 
+        day_actual = get_day_actual_values(selected_row)
         day_ref = get_day_reference_values(selected_row)
-        d1, d2 = st.columns(2)
-        d1.metric("평일 평균", format_rate(day_ref.get("weekday_ratio")))
-        d2.metric("주말 평균", format_rate(day_ref.get("weekend_ratio")))
+
+        a1, a2 = st.columns(2)
+        a1.metric("선택구역 평일", format_rate(day_actual.get("weekday_ratio")))
+        a2.metric("선택구역 주말", format_rate(day_actual.get("weekend_ratio")))
+
+        b1, b2 = st.columns(2)
+        b1.metric("구 평균 평일", format_rate(day_ref.get("weekday_ratio")))
+        b2.metric("구 평균 주말", format_rate(day_ref.get("weekend_ratio")))
 
         if not has_day_reference(selected_row):
             st.caption("gu_output_syn.csv에서 해당 구의 주말/평일 평균을 찾지 못했습니다.")
@@ -1192,6 +1270,7 @@ if show_debug:
         st.write("선택 row gu_nm:", selected_row.get("gu_nm"))
         st.write("summary reference(all_amt_sum):", ref_all_amt_sum)
         st.write("summary reference(revisit_rate):", ref_revisit_rate)
+        st.write("day actual:", get_day_actual_values(selected_row))
         st.write("day reference:", get_day_reference_values(selected_row))
         st.write("gi_col:", gi_col)
         st.write("selected Gi raw:", base_z)
