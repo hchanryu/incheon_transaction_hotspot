@@ -36,7 +36,7 @@ TOTAL_REFERENCE_CSV_PATH = DATA_DIR / "total_output_syn.csv"
 ALL_OPTION = "인천시 전체"
 LAYER_ID = "geojson_layer"
 LOWRES_SIMPLIFY_TOL = 0.0001
-REFERENCE_LABEL = "같은 구 기준"
+REFERENCE_LABEL = "같은 구 평균"
 SUMMARY_REFERENCE_LABEL = "같은 구 기준 요약값"
 DAY_REFERENCE_LABEL = "같은 구 기준 주말/평일 평균"
 
