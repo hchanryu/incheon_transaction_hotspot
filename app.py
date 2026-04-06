@@ -1225,22 +1225,7 @@ if selected_row:
         else:
             st.info("주말/평일 실제값 또는 reference 데이터를 찾지 못했습니다.")
 
-    with row3[1]:
-        st.markdown("### 주말/평일 기준")
 
-        day_actual = get_day_actual_values(selected_row)
-        day_ref = get_day_reference_values(selected_row)
-
-        a1, a2 = st.columns(2)
-        a1.metric("선택구역 평일", format_rate(day_actual.get("weekday_ratio")))
-        a2.metric("선택구역 주말", format_rate(day_actual.get("weekend_ratio")))
-
-        b1, b2 = st.columns(2)
-        b1.metric("구 평균 평일", format_rate(day_ref.get("weekday_ratio")))
-        b2.metric("구 평균 주말", format_rate(day_ref.get("weekend_ratio")))
-
-        if not has_day_reference(selected_row):
-            st.caption("gu_output_syn.csv에서 해당 구의 주말/평일 평균을 찾지 못했습니다.")
 else:
     st.info("지도에서 구역을 클릭하면 상세 문장과 bar chart가 표시됩니다.")
 
